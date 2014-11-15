@@ -24,6 +24,9 @@ type Client struct {
 	CertificateBase64 string
 	KeyFile           string
 	KeyBase64         string
+	Conn              net.Conn
+	ConnTls           *tls.Conn
+	TimeoutWaitError  time.Duration
 }
 
 // BareClient can be used to set the contents of your
@@ -38,12 +41,41 @@ func BareClient(gateway, certificateBase64, keyBase64 string) (c *Client) {
 
 // NewClient assumes you'll be passing in paths that
 // point to your certificate and key.
-func NewClient(gateway, certificateFile, keyFile string) (c *Client) {
+func NewClient(gateway, certificateFile, keyFile string, timeout time.Duration) (c *Client, err error) {
 	c = new(Client)
 	c.Gateway = gateway
 	c.CertificateFile = certificateFile
 	c.KeyFile = keyFile
-	return
+
+	var cert tls.Certificate
+	cert, err = tls.LoadX509KeyPair(certificateFile, keyFile)
+	if err != nil {
+		return c, err
+	}
+
+	gatewayParts := strings.Split(gateway, ":")
+	conf := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ServerName:   gatewayParts[0],
+	}
+
+	conn, err := net.DialTimeout("tcp", c.Gateway, timeout)
+	if err != nil {
+		return c, err
+	}
+
+	tlsConn := tls.Client(conn, conf)
+	tlsConn.SetDeadline(time.Now().Add(timeout))
+	err = tlsConn.Handshake()
+	if err != nil {
+		conn.Close()
+		return c, err
+	}
+
+	c.Conn = conn
+	c.ConnTls = tlsConn
+
+	return c, nil
 }
 
 // Send connects to the APN service and sends your push notification.
@@ -83,40 +115,8 @@ func (client *Client) Send(pn *PushNotification) (resp *PushNotificationResponse
 // possible to get a false positive if Apple takes a long time to respond.
 // It's probably not a deal-breaker, but something to be aware of.
 func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []byte) (err error) {
-	var cert tls.Certificate
 
-	if len(client.CertificateBase64) == 0 && len(client.KeyBase64) == 0 {
-		// The user did not specify raw block contents, so check the filesystem.
-		cert, err = tls.LoadX509KeyPair(client.CertificateFile, client.KeyFile)
-	} else {
-		// The user provided the raw block contents, so use that.
-		cert, err = tls.X509KeyPair([]byte(client.CertificateBase64), []byte(client.KeyBase64))
-	}
-
-	if err != nil {
-		return err
-	}
-
-	gatewayParts := strings.Split(client.Gateway, ":")
-	conf := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		ServerName: gatewayParts[0],
-	}
-
-	conn, err := net.Dial("tcp", client.Gateway)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	tlsConn := tls.Client(conn, conf)
-	err = tlsConn.Handshake()
-	if err != nil {
-		return err
-	}
-	defer tlsConn.Close()
-
-	_, err = tlsConn.Write(payload)
+	_, err = client.ConnTls.Write(payload)
 	if err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 	// timeouts when the notification succeeds.
 	timeoutChannel := make(chan bool, 1)
 	go func() {
-		time.Sleep(time.Second * TimeoutSeconds)
+		time.Sleep(client.TimeoutWaitError)
 		timeoutChannel <- true
 	}()
 
@@ -134,7 +134,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 	responseChannel := make(chan []byte, 1)
 	go func() {
 		buffer := make([]byte, 6, 6)
-		tlsConn.Read(buffer)
+		client.ConnTls.Read(buffer)
 		responseChannel <- buffer
 	}()
 
@@ -149,8 +149,8 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 	select {
 	case r := <-responseChannel:
 		resp.Success = false
-		resp.AppleResponse = ApplePushResponses[r[1]]
-		err = errors.New(resp.AppleResponse)
+		resp.AppleResponse = r[1]
+		err = errors.New(ApplePushResponses[r[1]])
 	case <-timeoutChannel:
 		resp.Success = true
 	}

@@ -23,7 +23,7 @@ var ApplePushResponses = map[uint8]string{
 // PushNotificationResponse details what Apple had to say, if anything.
 type PushNotificationResponse struct {
 	Success       bool
-	AppleResponse string
+	AppleResponse uint8
 	Error         error
 }
 
