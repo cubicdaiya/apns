@@ -156,9 +156,14 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 	// The first byte will always be set to 8.
 	select {
 	case r := <-responseChannel:
-		resp.Success = false
 		resp.AppleResponse = r[1]
 		err = errors.New(ApplePushResponses[r[1]])
+		if err.Error() == "NO_ERRORS" {
+			err = nil
+			resp.Success = true
+		} else {
+			resp.Success = false
+		}
 	case <-timeoutChannel:
 		resp.Success = true
 	}
