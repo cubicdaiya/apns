@@ -141,6 +141,7 @@ func (client *Client) ConnectAndWrite(resp *PushNotificationResponse, payload []
 	responseChannel := make(chan []byte, 1)
 	go func() {
 		buffer := make([]byte, 6, 6)
+		client.ConnTls.SetReadDeadline(time.Now().Add(client.TimeoutWaitError))
 		client.ConnTls.Read(buffer)
 		responseChannel <- buffer
 	}()
