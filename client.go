@@ -59,13 +59,20 @@ func NewClient(gateway, certificateFile, keyFile string, timeout time.Duration) 
 		ServerName:   gatewayParts[0],
 	}
 
-	conn, err := net.DialTimeout("tcp", c.Gateway, timeout)
+	var conn net.Conn
+	if timeout == 0 {
+		conn, err = net.Dial("tcp", c.Gateway)
+	} else {
+		conn, err = net.DialTimeout("tcp", c.Gateway, timeout)
+	}
 	if err != nil {
 		return c, err
 	}
 
 	tlsConn := tls.Client(conn, conf)
-	tlsConn.SetDeadline(time.Now().Add(timeout))
+	if timeout != 0 {
+		tlsConn.SetDeadline(time.Now().Add(timeout))
+	}
 	err = tlsConn.Handshake()
 	if err != nil {
 		conn.Close()
